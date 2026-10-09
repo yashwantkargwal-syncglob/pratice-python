@@ -1,0 +1,6 @@
+{
+  "name": "Blogger AI Tech Automation Engine",
+  "description": "Production Python automation engine & control studio connecting Google Trends (US/UK), Gemini API, and Google Blogger API v3 for automated SEO tech drafts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
