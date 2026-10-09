@@ -99,18 +99,33 @@ class Config:
     # 8. RATE LIMIT SAFETY (Seconds between post generations)
     INTER_POST_DELAY: int = int(os.getenv("INTER_POST_DELAY", "20"))
 
-    # 9. ARTICLE MEMORY & DEDUPLICATION DATABASE
+    # 9. POST PUBLISH STATUS ('DRAFT' or 'LIVE')
+    # 'DRAFT' (default): Safely saves to Blogger as drafts for human review.
+    # 'LIVE': Automatically publishes directly to your readers live.
+    BLOG_POST_STATUS: str = os.getenv(
+        "BLOG_POST_STATUS",
+        os.getenv("BLOGGER_POST_STATUS", os.getenv("POST_STATUS", "DRAFT"))
+    ).strip().upper()
+
+    # 10. ARTICLE MEMORY & DEDUPLICATION DATABASE
     # Persistent JSON tracking all generated topics to guarantee 0 duplicates
     HISTORY_FILE: str = os.getenv("HISTORY_FILE", "published_history.json")
 
-    # 10. REAL IMAGE GENERATION & EMBEDDING
-    # Automatically generates & embeds real AI tech illustrations into Blogger drafts
-    EMBED_REAL_IMAGES: bool = os.getenv("EMBED_REAL_IMAGES", "true").lower() in ("true", "1", "yes")
+    # 11. IMAGES CONFIGURATION (Include Images + Mode: Direct vs Suggestion)
+    # INCLUDE_IMAGES: Set to False to completely exclude images and placeholders
+    INCLUDE_IMAGES: bool = os.getenv("INCLUDE_IMAGES", "true").lower() in ("true", "1", "yes")
+    # IMAGE_MODE: 'direct' embeds real AI tech illustrations; 'suggestion' generates designer callout cards
+    IMAGE_MODE: str = os.getenv("IMAGE_MODE", "direct").strip().lower()
+    # Backwards compatibility with EMBED_REAL_IMAGES flag
+    if os.getenv("EMBED_REAL_IMAGES", "").lower() in ("false", "0", "no") and "IMAGE_MODE" not in os.environ:
+        IMAGE_MODE = "suggestion"
 
-    # 11. INTERNAL LINKING & BACKLINKS CONFIGURATION
-    # Automatically weaves backlinks to already published posts into new drafts
+    # 12. INTERNAL LINKING & BACKLINKS CONFIGURATION
+    # Automatically weaves natural backlinks to already published posts into new drafts/posts
     ENABLE_INTERNAL_LINKING: bool = os.getenv("ENABLE_INTERNAL_LINKING", "true").lower() in ("true", "1", "yes")
-    MAX_INTERNAL_LINKS: int = int(os.getenv("MAX_INTERNAL_LINKS", "2"))
+    MAX_INTERNAL_BACKLINKS: int = int(
+        os.getenv("MAX_INTERNAL_BACKLINKS", os.getenv("MAX_INTERNAL_LINKS", "2"))
+    )
 
 
 # ==============================================================================
@@ -495,10 +510,10 @@ class GeminiContentEngine:
         backlink_instructions = ""
         if internal_links and Config.ENABLE_INTERNAL_LINKING:
             links_formatted = []
-            for link in internal_links[:Config.MAX_INTERNAL_LINKS]:
+            for link in internal_links[:Config.MAX_INTERNAL_BACKLINKS]:
                 links_formatted.append(f'   - Title: "{link["title"]}" | URL: {link["url"]}')
             links_text = "\n".join(links_formatted)
-            target_count = min(len(internal_links), Config.MAX_INTERNAL_LINKS)
+            target_count = min(len(internal_links), Config.MAX_INTERNAL_BACKLINKS)
 
             backlink_instructions = f"""
 6. SEAMLESS CONTEXTUAL INTERNAL BACKLINKS (CRITICAL SEO RULE):
@@ -510,7 +525,17 @@ class GeminiContentEngine:
    - IT MUST FEEL 100% INVISIBLE & ORGANIC: The link MUST fit the technical flow of the sentence naturally (e.g., "...similar to the concurrency patterns we examined in [Rust vs Go for Microservices](URL)..." or "...when managing ephemeral state, as discussed in our deep-dive on [Agentic AI Workflows](URL)...").
    - STRICT BAN: NEVER make a lazy bulleted "Related Posts:" or "Also read:" section. Weave it directly inside the actual technical explanation paragraphs!
 """
-        
+
+        if Config.INCLUDE_IMAGES:
+            image_instructions = """4. IMAGE ANCHORS REQUIREMENT:
+   - Every ~300 words of content, insert a dedicated image anchor in this exact syntax:
+     [IMAGE_SUGGESTION: Highly descriptive prompt to generate or find a matching image, e.g., 'A modern high-tech server rack illuminated with neon violet LED indicators in a dark data center']
+   - Ensure you include AT LEAST 3 to 4 distinct [IMAGE_SUGGESTION: ...] tags placed naturally between sections."""
+        else:
+            image_instructions = """4. NO IMAGES / TEXT-FOCUSED FORMAT:
+   - Images are disabled by configuration. Do NOT include any [IMAGE_SUGGESTION: ...] tags or image placeholders.
+   - Rely strictly on compelling technical prose, bullet breakdowns, and code snippets."""
+
         return f"""You are a distinguished Senior Software Engineer, Technology Columnist, and SEO Specialist writing for a high-traffic developer and technology blog aimed at a tech-savvy audience in the {geo} ({locale_preference}).
 
 TOPIC TO COVER:
@@ -525,10 +550,7 @@ CRITICAL EDITORIAL AND STRUCTURAL GUIDELINES:
    - Use structured Markdown with an engaging H1 title.
    - Use multiple H2 and H3 subheadings for logical progression (e.g., The Architectural Shift, Technical Deep-Dive, Real-World Implementations, Performance Benchmarks, Future Outlook).
    - Include actionable code snippets (e.g., Python, Bash, TypeScript, Dockerfile, or configuration files) with markdown syntax highlighting if relevant to tools, programming, or architectures.
-4. IMAGE SUGGESTIONS REQUIREMENT (MANDATORY):
-   - Every ~300 words of content, you MUST insert a dedicated image anchor in this exact syntax:
-     [IMAGE_SUGGESTION: Highly descriptive prompt to generate or find a matching image, e.g., 'A modern high-tech server rack illuminated with neon violet LED indicators in a dark data center']
-   - Ensure you include AT LEAST 3 to 4 distinct [IMAGE_SUGGESTION: ...] tags placed naturally between sections.
+{image_instructions}
 {backlink_instructions}
 5. EXPLICIT SEO METADATA BLOCK:
    - At the very end of your response, output the following structured block verbatim:
@@ -660,10 +682,16 @@ class BloggerContentFormatter:
     @classmethod
     def convert_image_suggestions_to_html(cls, html_content: str) -> str:
         """
-        Transforms [IMAGE_SUGGESTION: ...] into real, high-resolution AI tech images
-        embedded directly into the Blogger HTML with responsive styling, rounded corners,
-        alt tags, and figure captions.
+        Transforms [IMAGE_SUGGESTION: ...] based on user's environment configuration:
+        - If INCLUDE_IMAGES is False: Strips all image suggestions cleanly out of the post.
+        - If IMAGE_MODE == 'direct': Embeds real, high-resolution AI tech images via Pollinations AI.
+        - If IMAGE_MODE == 'suggestion': Renders attractive designer preview cards for manual review.
         """
+        # If user disabled images completely in .env (INCLUDE_IMAGES=False)
+        if not Config.INCLUDE_IMAGES:
+            pattern = r"\s*\[IMAGE_SUGGESTION:\s*([^\]]+)\]\s*"
+            return re.sub(pattern, "\n", html_content)
+
         image_index = 0
 
         def replace_match(match):
@@ -671,8 +699,8 @@ class BloggerContentFormatter:
             image_index += 1
             prompt = match.group(1).strip()
 
-            if Config.EMBED_REAL_IMAGES:
-                # Generate real AI image URL via Pollinations AI (Zero API key required)
+            # Direct Real Image Mode: Embed high-res AI illustration directly in Blogger post
+            if Config.IMAGE_MODE in ("direct", "real", "image"):
                 encoded_prompt = urllib.parse.quote(f"{prompt}, high quality 4k tech illustration, modern tech aesthetic")
                 image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1200&height=675&nologo=true"
                 alt_text = html.escape(prompt[:120])
@@ -686,6 +714,7 @@ class BloggerContentFormatter:
   </figcaption>
 </figure>
 """
+            # Suggestion Mode: Render designer callout card
             else:
                 return f"""
 <div class="blogger-image-placeholder" style="margin: 28px 0; padding: 18px 22px; background: #0f172a; border-left: 4px solid #38bdf8; border-radius: 8px; color: #f1f5f9; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;">
@@ -694,7 +723,7 @@ class BloggerContentFormatter:
     <strong style="color: #38bdf8; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em;">Suggested Visual Asset #{image_index}</strong>
   </div>
   <p style="margin: 0 0 6px 0; font-size: 14px; font-style: italic; color: #cbd5e1; line-height: 1.5;">"{prompt}"</p>
-  <span style="font-size: 11px; color: #94a3b8;">Insert your banner or generated illustration here prior to publishing.</span>
+  <span style="font-size: 11px; color: #94a3b8;">Insert your custom graphic or generated illustration here.</span>
 </div>
 """
 
@@ -816,15 +845,30 @@ class BloggerClient:
                 logger.info("Refreshing expired Google OAuth access token...")
                 creds.refresh(Request())
             else:
-                if not os.path.exists(Config.CLIENT_SECRETS_FILE):
-                    raise FileNotFoundError(
-                        f"OAuth client secrets file '{Config.CLIENT_SECRETS_FILE}' not found!\n"
-                        f"Please download it from Google Cloud Console -> APIs & Services -> Credentials\n"
-                        f"and place it in the same directory as this script."
-                    )
-                logger.info("Initiating Google OAuth2 authorization flow...")
+                secrets_file = Config.CLIENT_SECRETS_FILE
+                if not os.path.exists(secrets_file):
+                    # Smart auto-discovery: search current directory for any client_secret*.json
+                    found_files = [
+                        f for f in os.listdir('.')
+                        if f.endswith('.json') and ('client_secret' in f or 'oauth' in f or 'client' in f)
+                        and f not in (Config.TOKEN_FILE, Config.HISTORY_FILE)
+                    ]
+                    if found_files:
+                        secrets_file = found_files[0]
+                        logger.info(f"💡 Auto-detected OAuth client secrets file: '{secrets_file}'")
+                    else:
+                        raise FileNotFoundError(
+                            f"OAuth client secrets file '{Config.CLIENT_SECRETS_FILE}' not found!\n"
+                            f"How to fix:\n"
+                            f"1. Download your OAuth 2.0 Client credentials JSON file from Google Cloud Console:\n"
+                            f"   APIs & Services -> Credentials -> Create Credentials -> OAuth 2.0 Client IDs -> Desktop App\n"
+                            f"2. Place the downloaded JSON file into this folder.\n"
+                            f"3. In .env, set: GOOGLE_CLIENT_SECRETS_FILE=client_secrets.json (not your GOCSPX secret key string)."
+                        )
+
+                logger.info(f"Initiating Google OAuth2 authorization flow using '{secrets_file}'...")
                 flow = InstalledAppFlow.from_client_secrets_file(
-                    Config.CLIENT_SECRETS_FILE,
+                    secrets_file,
                     Config.BLOGGER_SCOPES
                 )
                 creds = flow.run_local_server(port=0)
@@ -846,36 +890,44 @@ class BloggerClient:
 
         return service
 
-    def create_draft_post(
+    def create_post(
         self,
         title: str,
         content_html: str,
         labels: Optional[List[str]] = None,
-        meta_description: Optional[str] = None
+        meta_description: Optional[str] = None,
+        status: Optional[str] = None
     ) -> Dict[str, any]:
         """
-        Creates a new post on Blogger with `isDraft=True`.
-        Guaranteed NEVER to publish automatically.
+        Creates a new post on Blogger.
+        Honors `status` ('DRAFT' or 'LIVE').
+        If 'DRAFT' (default): saves safely with isDraft=True for review in Blogger dashboard.
+        If 'LIVE': publishes directly to your audience immediately with isDraft=False.
         """
+        post_status = (status or Config.BLOG_POST_STATUS).strip().upper()
+        is_draft = post_status != "LIVE"
+
         post_body = {
             "kind": "blogger#post",
             "title": title,
             "content": content_html,
             "labels": labels or ["Technology", "Tech Trends", "AI", "Software"],
-            "status": "DRAFT"
+            "status": "DRAFT" if is_draft else "LIVE"
         }
 
         # Some Blogger templates support custom search descriptions via post body
         if meta_description:
             post_body["searchDescription"] = meta_description[:160]
 
-        logger.info(f"Uploading draft to Blogger Blog ID: {self.blog_id}...")
+        if is_draft:
+            logger.info(f"📝 Staging post as DRAFT on Blogger Blog ID: {self.blog_id}...")
+        else:
+            logger.info(f"🚀 Publishing post LIVE immediately on Blogger Blog ID: {self.blog_id}...")
         
-        # isDraft=True is the CRITICAL safety flag
         request = self.service.posts().insert(
             blogId=self.blog_id,
             body=post_body,
-            isDraft=True
+            isDraft=is_draft
         )
         post_response = request.execute()
         
@@ -883,16 +935,24 @@ class BloggerClient:
         post_url = post_response.get("url")
         edit_url = f"https://www.blogger.com/blog/post/edit/{self.blog_id}/{post_id}"
         
-        logger.info(f"Draft successfully saved! Post ID: {post_id}")
-        logger.info(f"Edit & Review URL: {edit_url}")
+        if is_draft:
+            logger.info(f"✅ Draft successfully staged! Post ID: {post_id}")
+            logger.info(f"Edit & Review URL: {edit_url}")
+        else:
+            logger.info(f"🎉 Post is LIVE! Post ID: {post_id}")
+            logger.info(f"Live URL: {post_url or edit_url}")
 
         return {
             "id": post_id,
             "url": post_url,
             "edit_url": edit_url,
             "title": post_response.get("title"),
-            "status": "DRAFT"
+            "status": "DRAFT" if is_draft else "LIVE"
         }
+
+    def create_draft_post(self, *args, **kwargs):
+        """Backwards compatibility alias for create_post."""
+        return self.create_post(*args, **kwargs)
 
     def get_published_posts(self, max_results: int = 15) -> List[Dict[str, str]]:
         """
@@ -933,32 +993,45 @@ class BloggerAutomationPipeline:
       4. Blogger Draft Creation
     """
 
-    def __init__(self, dry_run: bool = False):
+    def __init__(
+        self,
+        dry_run: bool = False,
+        status: Optional[str] = None,
+        include_images: Optional[bool] = None,
+        image_mode: Optional[str] = None
+    ):
         self.dry_run = dry_run
+        self.post_status = (status or Config.BLOG_POST_STATUS).strip().upper()
+        if include_images is not None:
+            Config.INCLUDE_IMAGES = include_images
+        if image_mode is not None:
+            Config.IMAGE_MODE = image_mode.strip().lower()
+
         self.gemini_engine = GeminiContentEngine()
         self.blogger_client = None if dry_run else BloggerClient()
 
     def process_topic(self, topic_info: Dict[str, str]) -> Optional[Dict[str, any]]:
-        """Processes a single topic from generation to draft staging."""
+        """Processes a single topic from generation to draft or live publication."""
         title_topic = topic_info["title"]
         geo = topic_info.get("geo", "US")
+        is_draft = self.post_status != "LIVE"
 
         print("\n" + "=" * 70)
-        logger.info(f"PROCESSING TOPIC: '{title_topic}' [Region: {geo}]")
+        logger.info(f"PROCESSING TOPIC: '{title_topic}' [Region: {geo}] [Target: {self.post_status}]")
         print("=" * 70)
 
         # 1. Fetch published posts to weave natural internal backlinks
         internal_links = []
         if Config.ENABLE_INTERNAL_LINKING:
             if not self.dry_run and self.blogger_client:
-                internal_links = self.blogger_client.get_published_posts(max_results=Config.MAX_INTERNAL_LINKS * 3)
+                internal_links = self.blogger_client.get_published_posts(max_results=Config.MAX_INTERNAL_BACKLINKS * 3)
             # Fallback to local memory history if Blogger has 0 published posts or during dry-run
             if not internal_links:
-                internal_links = HistoryManager.get_published_history_links(max_count=Config.MAX_INTERNAL_LINKS * 3)
+                internal_links = HistoryManager.get_published_history_links(max_count=Config.MAX_INTERNAL_BACKLINKS * 3)
 
             if internal_links:
-                selected_links = internal_links[:Config.MAX_INTERNAL_LINKS]
-                logger.info(f"🔗 [Internal Backlinks] Found {len(selected_links)} published post(s) to seamlessly weave into draft:")
+                selected_links = internal_links[:Config.MAX_INTERNAL_BACKLINKS]
+                logger.info(f"🔗 [Internal Backlinks] Found {len(selected_links)} published post(s) to seamlessly weave into article:")
                 for l in selected_links:
                     logger.info(f"   * '{l['title']}' -> {l['url']}")
 
@@ -969,7 +1042,7 @@ class BloggerAutomationPipeline:
             logger.error(f"Failed to generate article for '{title_topic}': {e}")
             return None
 
-        # 2. Extract SEO metadata & format HTML
+        # 3. Extract SEO metadata & format HTML
         clean_markdown, seo_meta = BloggerContentFormatter.parse_seo_metadata(raw_markdown)
         article_title = seo_meta.get("title") or BloggerContentFormatter.extract_post_title(clean_markdown, title_topic)
         html_content = BloggerContentFormatter.format_to_blogger_html(clean_markdown)
@@ -984,15 +1057,17 @@ class BloggerAutomationPipeline:
         logger.info(f"  Title: {article_title}")
         logger.info(f"  SEO Meta Description: {seo_meta.get('description', 'N/A')}")
         logger.info(f"  HTML Length: {len(html_content)} characters")
+        logger.info(f"  Image Mode: {'DISABLED' if not Config.INCLUDE_IMAGES else Config.IMAGE_MODE.upper()}")
         logger.info(f"  Labels: {', '.join(labels)}")
 
-        # 3. Save to Blogger (or preview in Dry-Run)
+        # 4. Save to Blogger (or preview in Dry-Run)
         if self.dry_run:
-            logger.info("[DRY-RUN MODE] Skipping Blogger API call.")
+            status_label = f"{self.post_status} (DRY RUN)"
+            logger.info(f"[DRY-RUN MODE] Skipping Blogger API call ({status_label}).")
             # Save local HTML preview for inspection
             filename = f"preview_{int(time.time())}_{re.sub(r'[^a-zA-Z0-9]', '_', title_topic)[:25]}.html"
             with open(filename, "w", encoding="utf-8") as f:
-                f.write(f"<!-- Title: {article_title} -->\n{html_content}")
+                f.write(f"<!-- Status: {self.post_status} | Title: {article_title} -->\n{html_content}")
             logger.info(f"[DRY-RUN MODE] HTML preview saved to: {filename}")
 
             # Record in persistent history memory to prevent future duplicates
@@ -1001,22 +1076,23 @@ class BloggerAutomationPipeline:
                 title=article_title,
                 geo=geo,
                 post_id="dry-run-preview",
-                is_draft=True
+                is_draft=is_draft
             )
 
             return {
                 "title": article_title,
-                "status": "DRAFT (DRY RUN)",
+                "status": status_label,
                 "id": "dry-run-preview",
                 "preview_file": filename
             }
 
         try:
-            draft_result = self.blogger_client.create_draft_post(
+            post_result = self.blogger_client.create_post(
                 title=article_title,
                 content_html=html_content,
                 labels=labels,
-                meta_description=seo_meta.get("description")
+                meta_description=seo_meta.get("description"),
+                status=self.post_status
             )
 
             # Record in persistent memory database
@@ -1024,19 +1100,19 @@ class BloggerAutomationPipeline:
                 topic=title_topic,
                 title=article_title,
                 geo=geo,
-                post_id=str(draft_result.get("id", "blogger-draft")),
-                is_draft=True
+                post_id=str(post_result.get("id", "blogger-post")),
+                is_draft=is_draft
             )
 
-            return draft_result
+            return post_result
         except Exception as e:
-            logger.error(f"Failed to stage draft on Blogger: {e}")
+            logger.error(f"Failed to post on Blogger: {e}")
             return None
 
     def run_batch(self, count: int = 5) -> List[Dict[str, any]]:
-        """Executes a full run generating exactly `count` distinct drafts."""
+        """Executes a full run generating exactly `count` distinct articles."""
         start_time = datetime.now()
-        logger.info(f"=== INITIATING BLOGGER AUTOMATION RUN ({count} Tech Drafts) ===")
+        logger.info(f"=== INITIATING BLOGGER AUTOMATION RUN ({count} Posts | Mode: {self.post_status}) ===")
 
         # Step 1: Research Top Tech Trends
         trends = TechTrendResearcher.get_top_tech_trends(max_count=count)
@@ -1058,7 +1134,7 @@ class BloggerAutomationPipeline:
 
         duration = (datetime.now() - start_time).total_seconds()
         print("\n" + "=" * 70)
-        logger.info(f"BATCH COMPLETE! Created {len(results)}/{len(trends)} drafts in {duration:.1f}s.")
+        logger.info(f"BATCH COMPLETE! Created {len(results)}/{len(trends)} posts in {duration:.1f}s.")
         for r in results:
             logger.info(f" - {r['title']} -> Status: {r['status']} | ID: {r.get('id')}")
         print("=" * 70 + "\n")
@@ -1077,12 +1153,40 @@ def main():
         "--count",
         type=int,
         default=Config.TARGET_POSTS_COUNT,
-        help="Number of drafts to generate (Default: 5)"
+        help="Number of articles to generate (Default: 5)"
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Simulate trends research and Gemini generation without pushing to Blogger"
+    )
+    parser.add_argument(
+        "--status",
+        choices=["draft", "live"],
+        default=Config.BLOG_POST_STATUS.lower(),
+        help="Post status: 'draft' (save for review) or 'live' (publish immediately) (Default: from .env)"
+    )
+    parser.add_argument(
+        "--publish-live",
+        action="store_true",
+        help="Shortcut to immediately publish posts LIVE to readers (overrides --status draft)"
+    )
+    parser.add_argument(
+        "--no-images",
+        action="store_true",
+        help="Exclude images and placeholders completely from the generated blog posts"
+    )
+    parser.add_argument(
+        "--image-mode",
+        choices=["direct", "suggestion"],
+        default=Config.IMAGE_MODE,
+        help="Image strategy: 'direct' (embed real AI images) or 'suggestion' (designer cards)"
+    )
+    parser.add_argument(
+        "--backlinks-count",
+        type=int,
+        default=Config.MAX_INTERNAL_BACKLINKS,
+        help="Maximum internal backlinks to weave per article (Default: from .env)"
     )
     parser.add_argument(
         "--mode",
@@ -1118,6 +1222,12 @@ def main():
         HistoryManager.clear_history()
         sys.exit(0)
 
+    # Determine status & image flags
+    target_status = "LIVE" if args.publish_live else args.status.upper()
+    include_images = False if args.no_images else Config.INCLUDE_IMAGES
+    image_mode = args.image_mode
+    Config.MAX_INTERNAL_BACKLINKS = args.backlinks_count
+
     # Verify Configuration (unless dry-run without credentials)
     if not Config.GEMINI_API_KEY:
         print("\n[ERROR] GEMINI_API_KEY is not set.")
@@ -1131,12 +1241,17 @@ def main():
         print("Find your ID in the Blogger URL: https://www.blogger.com/blog/posts/<BLOG_ID>\n")
         sys.exit(1)
 
-    pipeline = BloggerAutomationPipeline(dry_run=args.dry_run)
+    pipeline = BloggerAutomationPipeline(
+        dry_run=args.dry_run,
+        status=target_status,
+        include_images=include_images,
+        image_mode=image_mode
+    )
 
     if args.mode == "once":
         pipeline.run_batch(count=args.count)
     elif args.mode == "daemon":
-        logger.info(f"Starting in Daemon mode. Running every {args.interval_hours} hours. Press Ctrl+C to stop.")
+        logger.info(f"Starting in Daemon mode. Running every {args.interval_hours} hours. Target: {target_status}. Press Ctrl+C to stop.")
         while True:
             try:
                 pipeline.run_batch(count=args.count)

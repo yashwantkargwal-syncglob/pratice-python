@@ -15,8 +15,10 @@ python -m venv venv
 # On Linux/macOS:
 source venv/bin/activate
 
-# On Windows:
-venv\Scripts\activate
+# On Windows (PowerShell):
+venv\Scripts\Activate.ps1
+# Or Command Prompt:
+venv\Scripts\activate.bat
 
 # 2. Install dependencies
 pip install -r requirements.txt
@@ -54,7 +56,7 @@ pip install -r requirements.txt
 
 ## 4. Google Cloud Console: Blogger API & OAuth Credentials
 
-To allow Python to stage drafts in your Blogger account, configure an OAuth 2.0 Client:
+To allow Python to stage drafts or publish to your Blogger account, configure an OAuth 2.0 Client:
 
 ### Step 4.1: Enable Blogger API v3
 1. Visit the **[Google Cloud Console](https://console.cloud.google.com/)**.
@@ -83,57 +85,102 @@ To allow Python to stage drafts in your Blogger account, configure an OAuth 2.0 
 3. Application type: Select **Desktop app**.
 4. Name: `Blogger Desktop CLI Client`.
 5. Click **Create**.
-6. A dialog appears. Click **Download JSON**.
-7. Rename the downloaded file to `client_secrets.json` and move it into your project folder.
+6. A dialog appears. Click **Download JSON** (or the down arrow icon on the credentials list).
+7. Save the downloaded file into your project folder and name it `client_secrets.json`.
+
+> ⚠️ **CRITICAL NOTE**:
+> Google Cloud will show you a "Client Secret" text starting with `GOCSPX-...`. 
+> **DO NOT** put `GOCSPX-...` in your `.env` as the filename! 
+> In `.env`, set:
+> ```env
+> GOOGLE_CLIENT_SECRETS_FILE="client_secrets.json"
+> ```
+> The script also includes auto-discovery: if you have any downloaded `client_secret_*.json` in your folder, it will automatically find and use it!
 
 ---
 
-## 5. Running the Script
+## 5. Environment Variables Overview (.env)
 
-### Step 5.1: Dry-Run Test (No Blogger Call)
-Test Google Trends research and Gemini article generation without touching Blogger:
+| Variable | Default | Description |
+|---|---|---|
+| `GEMINI_API_KEY` | *(Required)* | Google Gemini AI Key |
+| `BLOGGER_BLOG_ID` | *(Required)* | Numeric Blogger ID |
+| `GOOGLE_CLIENT_SECRETS_FILE` | `client_secrets.json` | Path to downloaded OAuth client JSON |
+| `BLOG_POST_STATUS` | `DRAFT` | `DRAFT` (safe staging for review) or `LIVE` (instant publishing) |
+| `INCLUDE_IMAGES` | `true` | `true` (add images/prompts) or `false` (pure text and code only) |
+| `IMAGE_MODE` | `direct` | `direct` (real high-res AI images) or `suggestion` (designer cards) |
+| `ENABLE_INTERNAL_LINKING` | `true` | Naturally link to previously published posts on your blog |
+| `MAX_INTERNAL_BACKLINKS` | `2` | Number of internal backlinks woven per article |
+| `HISTORY_FILE` | `published_history.json` | Persistent memory file preventing duplicate topics |
+| `POSTS_PER_RUN` | `5` | Batch count of articles per execution |
+| `GEMINI_MODEL` | `gemini-3.8-flash` | Active Gemini model (`gemini-3.8-flash` / `gemini-flash-latest`) |
+
+---
+
+## 6. Running the Script
+
+### 6.1 Dry-Run Test (Zero Blogger Calls)
+Test trends research and Gemini generation locally:
 ```bash
 python blogger_trends_automation.py --dry-run --count 1
 ```
-This generates a local HTML preview file (`preview_....html`) that you can open in your browser to inspect the formatting, H2/H3 tags, and `[IMAGE_SUGGESTION: ...]` cards!
+Creates a local `preview_....html` file that you can double click and preview in your browser!
 
-### Step 5.2: First Live Run (OAuth Consent)
+### 6.2 Staging Drafts (Default)
+Generates 5 articles and saves them as drafts in your Blogger dashboard:
 ```bash
 python blogger_trends_automation.py --count 5
 ```
-1. On the very first run, a browser tab will automatically open asking you to sign in with your Google account.
-2. If you see "Google hasn't verified this app", click **Advanced** -> **Go to Blogger Tech Bot (unsafe)**.
-3. Grant access to manage your Blogger account.
-4. Once completed, the browser will display *"The authentication flow has completed."*
-5. The script automatically saves `token.json` in your directory. Future runs are **100% headless** and will NOT open a browser!
+
+### 6.3 Publishing Directly LIVE to Readers
+```bash
+python blogger_trends_automation.py --count 1 --publish-live
+# or:
+python blogger_trends_automation.py --status live
+```
+
+### 6.4 Controlling Images
+```bash
+# Text-only (no images or placeholders)
+python blogger_trends_automation.py --no-images
+
+# With designer suggestion cards instead of direct images
+python blogger_trends_automation.py --image-mode suggestion
+```
+
+### 6.5 Inspecting & Managing Memory (Zero Duplicates)
+```bash
+# View list of all previously covered topics:
+python blogger_trends_automation.py --history
+
+# Reset memory to start fresh:
+python blogger_trends_automation.py --clear-history
+```
 
 ---
 
-## 6. Automating with Cron or Systemd
+## 7. First Run: One-Time OAuth Login
+
+1. On the very first live run, a browser tab opens asking you to log into Google.
+2. If you see *"Google hasn't verified this app"*, click **Advanced** -> **Go to Blogger Tech Bot (unsafe)**.
+3. Grant permission to manage Blogger.
+4. Once completed, the browser shows *"The authentication flow has completed."*
+5. The script automatically saves `token.json`. **All future runs are 100% headless** and run silently in the background!
+
+---
+
+## 8. Automating in Background (Cron / Daemon)
 
 ### Option A: Crontab (Runs daily at 9:00 AM)
-Open crontab:
 ```bash
 crontab -e
 ```
-Add this line (adjust paths to your environment):
+Add this line:
 ```cron
-0 9 * * * cd /home/ubuntu/blogger_automation && /home/ubuntu/blogger_automation/venv/bin/python blogger_trends_automation.py --count 5 >> /home/ubuntu/blogger_automation/cron.log 2>&1
+0 9 * * * cd /home/ubuntu/blogger_automation && /home/ubuntu/blogger_automation/venv/bin/python blogger_trends_automation.py --count 5 >> cron.log 2>&1
 ```
 
 ### Option B: Built-in Daemon Mode (Runs every 4 hours)
-Run with nohup or tmux:
 ```bash
 nohup python blogger_trends_automation.py --mode daemon --interval-hours 4 > automation.log 2>&1 &
 ```
-
----
-
-## 7. Reviewing Your Drafts in Blogger
-
-1. Go to **[Blogger Dashboard](https://www.blogger.com/)**.
-2. Navigate to **Posts** -> **Drafts**.
-3. You will find your 5 newly staged articles with:
-   - Clean titles and tech labels.
-   - High-contrast visual placeholders for your images.
-   - Ready to review, edit, add images, and publish with one click!

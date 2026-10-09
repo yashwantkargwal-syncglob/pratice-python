@@ -39,30 +39,56 @@ export const CredentialsWizard: React.FC = () => {
     }
   };
 
+  const [postStatus, setPostStatus] = useState<'DRAFT' | 'LIVE'>('DRAFT');
+  const [includeImages, setIncludeImages] = useState<boolean>(true);
+  const [imageMode, setImageMode] = useState<'direct' | 'suggestion'>('direct');
+  const [enableBacklinks, setEnableBacklinks] = useState<boolean>(true);
+  const [maxBacklinks, setMaxBacklinks] = useState<number>(2);
+  const [geminiModel, setGeminiModel] = useState<string>('gemini-3.8-flash');
+
   const generatedEnvContent = `# ==============================================================================
 # BLOGGER & GEMINI AUTOMATION ENVIRONMENT CONFIGURATION
 # ==============================================================================
 
-# 1. Google Gemini AI API Key (from Google AI Studio: https://aistudio.google.com/)
+# 1. Google Gemini AI API Key (from Google AI Studio: https://aistudio.google.com/app/apikey)
 GEMINI_API_KEY="${geminiApiKey || 'your_gemini_api_key_here'}"
 
-# 2. Google Blogger Blog ID
+# 2. Google Blogger Blog ID (Numeric ID from your Blogger dashboard URL)
 BLOGGER_BLOG_ID="${detectedBlogId || 'your_blogger_blog_id_here'}"
 
 # 3. Path to OAuth2 Client Secrets JSON file from Google Cloud Console
+# IMPORTANT: Put the filename (e.g. client_secrets.json), NOT your GOCSPX secret key!
 GOOGLE_CLIENT_SECRETS_FILE="client_secrets.json"
 
-# 4. Path to persist OAuth tokens
+# 4. Path to persist OAuth tokens (auto-generated after first browser login)
 GOOGLE_TOKEN_FILE="token.json"
 
 # 5. Geographies to monitor (US = United States, GB = United Kingdom)
 GEO_REGIONS="${geoRegions}"
 
-# 6. Target daily draft batch count
+# 6. Target daily batch post count
 POSTS_PER_RUN=${postsPerRun}
 
-# 7. Model choice
-GEMINI_MODEL="gemini-2.5-flash"
+# 7. Model choice (Supported: gemini-3.8-flash, gemini-flash-latest, gemini-3.1-flash-lite)
+GEMINI_MODEL="${geminiModel}"
+
+# 8. POST STATUS: 'DRAFT' (safe dashboard staging) or 'LIVE' (instant public publishing)
+BLOG_POST_STATUS="${postStatus}"
+
+# 9. IMAGES CONFIGURATION
+# INCLUDE_IMAGES: true or false
+INCLUDE_IMAGES=${includeImages}
+
+# IMAGE_MODE: 'direct' (embeds real high-res AI images) or 'suggestion' (designer cards)
+IMAGE_MODE="${imageMode}"
+
+# 10. AUTOMATIC INTERNAL BACKLINKING
+# Weaves natural, contextual backlinks to your previously published Blogger posts
+ENABLE_INTERNAL_LINKING=${enableBacklinks}
+MAX_INTERNAL_BACKLINKS=${maxBacklinks}
+
+# 11. ARTICLE MEMORY & DEDUPLICATION DATABASE
+HISTORY_FILE="published_history.json"
 `;
 
   const handleCopyEnv = () => {
@@ -252,6 +278,15 @@ GEMINI_MODEL="gemini-2.5-flash"
               </div>
             );
           })}
+
+          <div className="p-3 bg-amber-950/40 border border-amber-800/80 rounded-lg flex items-start gap-2.5 text-xs text-amber-300">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div>
+              <strong className="font-semibold block text-amber-200">Common Mistake to Avoid:</strong>
+              When Google Cloud creates your credential, it displays a Client Secret text starting with <code>GOCSPX-...</code>. 
+              <strong> Do NOT put this code as the filename in .env!</strong> Instead, click the <strong>Download JSON</strong> icon in the credentials table, save that file as <code>client_secrets.json</code> in your project directory, and reference that file name.
+            </div>
+          </div>
         </div>
       </div>
 
@@ -299,35 +334,139 @@ GEMINI_MODEL="gemini-2.5-flash"
               placeholder="8492049182391029384"
               className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs sm:text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:border-sky-500 font-mono"
             />
+            <span className="text-[11px] text-slate-500 mt-1 block">
+              Auto-extracted when pasting URL in Step 1.
+            </span>
           </div>
 
           <div>
             <label className="text-xs font-medium text-slate-300 block mb-1">
-              Monitored Geographies:
+              Blogger Publication Status:
             </label>
             <select
-              value={geoRegions}
-              onChange={(e) => setGeoRegions(e.target.value)}
+              value={postStatus}
+              onChange={(e) => setPostStatus(e.target.value as any)}
               className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs sm:text-sm text-slate-200 focus:outline-none focus:border-sky-500 font-mono"
             >
-              <option value="US,GB">US,GB (United States & United Kingdom)</option>
-              <option value="US">US Only (United States)</option>
-              <option value="GB">GB Only (United Kingdom)</option>
+              <option value="DRAFT">DRAFT (Safe staging for manual review)</option>
+              <option value="LIVE">LIVE (Directly publish to readers immediately)</option>
             </select>
           </div>
 
           <div>
             <label className="text-xs font-medium text-slate-300 block mb-1">
-              Drafts Per Batch (Default: 5):
+              Gemini AI Model:
             </label>
-            <input
-              type="number"
-              min={1}
-              max={15}
-              value={postsPerRun}
-              onChange={(e) => setPostsPerRun(parseInt(e.target.value) || 5)}
+            <select
+              value={geminiModel}
+              onChange={(e) => setGeminiModel(e.target.value)}
               className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs sm:text-sm text-slate-200 focus:outline-none focus:border-sky-500 font-mono"
-            />
+            >
+              <option value="gemini-3.8-flash">gemini-3.8-flash (Recommended active model)</option>
+              <option value="gemini-flash-latest">gemini-flash-latest (Reliable high throughput)</option>
+              <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Fast and ultra-lightweight)</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-slate-300 block mb-1">
+              Blog Images Setting:
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setIncludeImages(true)}
+                className={`px-3 py-2 text-xs rounded-lg border font-medium transition ${
+                  includeImages
+                    ? 'bg-sky-950 border-sky-500 text-sky-300'
+                    : 'bg-slate-950 border-slate-800 text-slate-400'
+                }`}
+              >
+                Include Images
+              </button>
+              <button
+                type="button"
+                onClick={() => setIncludeImages(false)}
+                className={`px-3 py-2 text-xs rounded-lg border font-medium transition ${
+                  !includeImages
+                    ? 'bg-rose-950 border-rose-500 text-rose-300'
+                    : 'bg-slate-950 border-slate-800 text-slate-400'
+                }`}
+              >
+                No Images (Text Only)
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-slate-300 block mb-1">
+              Image Mode (if enabled):
+            </label>
+            <select
+              disabled={!includeImages}
+              value={imageMode}
+              onChange={(e) => setImageMode(e.target.value as any)}
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs sm:text-sm text-slate-200 focus:outline-none focus:border-sky-500 font-mono disabled:opacity-50"
+            >
+              <option value="direct">Direct Real AI Images (Embedded figure cards)</option>
+              <option value="suggestion">Suggestion Cards (Designer callouts for review)</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-slate-300 block mb-1">
+              Contextual Internal Backlinking:
+            </label>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setEnableBacklinks(!enableBacklinks)}
+                className={`px-3 py-2 text-xs rounded-lg border font-medium transition flex-1 ${
+                  enableBacklinks
+                    ? 'bg-emerald-950 border-emerald-500 text-emerald-300'
+                    : 'bg-slate-950 border-slate-800 text-slate-400'
+                }`}
+              >
+                {enableBacklinks ? 'Backlinks: Enabled' : 'Backlinks: Disabled'}
+              </button>
+              <select
+                disabled={!enableBacklinks}
+                value={maxBacklinks}
+                onChange={(e) => setMaxBacklinks(parseInt(e.target.value) || 2)}
+                className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono disabled:opacity-50"
+              >
+                <option value={1}>1 Link</option>
+                <option value={2}>2 Links</option>
+                <option value={3}>3 Links</option>
+                <option value={4}>4 Links</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-slate-300 block mb-1">
+              Monitored Geographies & Batch Count:
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <select
+                value={geoRegions}
+                onChange={(e) => setGeoRegions(e.target.value)}
+                className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono"
+              >
+                <option value="US,GB">US,GB</option>
+                <option value="US">US Only</option>
+                <option value="GB">GB Only</option>
+              </select>
+              <input
+                type="number"
+                min={1}
+                max={15}
+                value={postsPerRun}
+                onChange={(e) => setPostsPerRun(parseInt(e.target.value) || 5)}
+                className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono"
+                placeholder="5 posts"
+              />
+            </div>
           </div>
         </div>
 
