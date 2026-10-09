@@ -88,8 +88,8 @@ class Config:
     ]
 
     # 6. GEMINI MODEL CONFIGURATION
-    # Recommended: gemini-2.5-flash or gemini-1.5-pro / gemini-2.0-flash
-    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    # Active supported models: gemini-3.8-flash, gemini-flash-latest, gemini-3.1-flash-lite
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 
     # 7. BLOGGER SCOPE
     BLOGGER_SCOPES: List[str] = ["https://www.googleapis.com/auth/blogger"]
@@ -355,10 +355,10 @@ Write the complete article now in clean Markdown.
         prompt = self._build_prompt(topic, geo)
         logger.info(f"Requesting Gemini content generation for topic: '{topic}' ({geo})...")
 
-        # Models to try in cascade order if primary encounters 503/404/429
-        preferred_model = Config.GEMINI_MODEL
+        # Active supported models in cascade order
+        preferred_model = Config.GEMINI_MODEL or "gemini-3.8-flash"
         model_candidates = [preferred_model]
-        for fallback in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]:
+        for fallback in ["gemini-flash-latest", "gemini-3.1-flash-lite", "gemini-3.8-flash"]:
             if fallback not in model_candidates:
                 model_candidates.append(fallback)
 
