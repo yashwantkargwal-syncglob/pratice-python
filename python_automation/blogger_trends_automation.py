@@ -97,6 +97,123 @@ class Config:
     # 8. RATE LIMIT SAFETY (Seconds between post generations)
     INTER_POST_DELAY: int = int(os.getenv("INTER_POST_DELAY", "20"))
 
+    # 9. ARTICLE MEMORY & DEDUPLICATION DATABASE
+    # Persistent JSON tracking all generated topics to guarantee 0 duplicates
+    HISTORY_FILE: str = os.getenv("HISTORY_FILE", "published_history.json")
+
+
+# ==============================================================================
+# MEMORY & DEDUPLICATION ENGINE
+# ==============================================================================
+class HistoryManager:
+    """
+    Manages persistent memory of all generated and staged blog posts.
+    Stores history in a local JSON database (published_history.json).
+    Guarantees that previously covered topics or near-identical titles
+    are NEVER re-generated.
+    """
+
+    @classmethod
+    def _normalize(cls, text: str) -> str:
+        """Strips punctuation, lowercases, and removes extra spaces."""
+        clean = re.sub(r'[^a-zA-Z0-9\s]', '', text.lower())
+        return ' '.join(clean.split())
+
+    @classmethod
+    def load_history(cls) -> Dict[str, any]:
+        """Loads article history from disk."""
+        if not os.path.exists(Config.HISTORY_FILE):
+            return {"articles": []}
+        try:
+            with open(Config.HISTORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.warning(f"Could not read history file '{Config.HISTORY_FILE}': {e}. Using empty memory.")
+            return {"articles": []}
+
+    @classmethod
+    def is_already_covered(cls, topic: str) -> Tuple[bool, Optional[str]]:
+        """
+        Checks if a topic has already been generated.
+        Uses exact normalized match as well as token overlap similarity
+        to prevent near-duplicate topics (e.g. 'Agentic AI in Python' vs 'Agentic AI with Python').
+        """
+        history = cls.load_history()
+        norm_topic = cls._normalize(topic)
+        topic_words = set(norm_topic.split())
+
+        for entry in history.get("articles", []):
+            existing_norm = entry.get("normalized_topic", "")
+            if not existing_norm:
+                existing_norm = cls._normalize(entry.get("topic", ""))
+
+            # 1. Exact normalized match
+            if norm_topic == existing_norm:
+                return True, entry.get("date", "Previously")
+
+            # 2. Token overlap similarity match (Jaccard similarity >= 70%)
+            existing_words = set(existing_norm.split())
+            if topic_words and existing_words:
+                intersection = topic_words.intersection(existing_words)
+                union = topic_words.union(existing_words)
+                similarity = len(intersection) / len(union) if union else 0
+                if similarity >= 0.70:
+                    return True, f"{entry.get('date', 'Previously')} (Similar to: '{entry.get('topic')}')"
+
+        return False, None
+
+    @classmethod
+    def record_entry(cls, topic: str, title: str, geo: str, post_id: str, is_draft: bool = True):
+        """Records a successfully generated/staged article into persistent history."""
+        history = cls.load_history()
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        entry = {
+            "topic": topic,
+            "normalized_topic": cls._normalize(topic),
+            "title": title,
+            "geo": geo,
+            "post_id": post_id,
+            "is_draft": is_draft,
+            "date": now_str,
+            "timestamp": int(time.time())
+        }
+
+        history.setdefault("articles", []).append(entry)
+
+        try:
+            with open(Config.HISTORY_FILE, "w", encoding="utf-8") as f:
+                json.dump(history, f, indent=2, ensure_ascii=False)
+            logger.info(f"💾 Saved '{topic}' to memory ({Config.HISTORY_FILE}). Total distinct posts: {len(history['articles'])}")
+        except Exception as e:
+            logger.error(f"Failed to save history to '{Config.HISTORY_FILE}': {e}")
+
+    @classmethod
+    def print_history_summary(cls):
+        """Prints a clean summary of previously generated drafts."""
+        history = cls.load_history()
+        articles = history.get("articles", [])
+        print("\n" + "=" * 70)
+        print(f"BLOGGER AUTOMATION MEMORY DATABASE ({Config.HISTORY_FILE})")
+        print(f"Total Unique Posts Stored: {len(articles)}")
+        print("=" * 70)
+        if not articles:
+            print("No articles recorded yet. Memory is empty.")
+        else:
+            for idx, a in enumerate(articles, 1):
+                print(f"{idx}. [{a.get('date', 'N/A')}] [{a.get('geo', 'US')}] {a.get('title')}")
+                print(f"   Original Topic: '{a.get('topic')}' | Blogger ID: {a.get('post_id')}")
+        print("=" * 70 + "\n")
+
+    @classmethod
+    def clear_history(cls):
+        """Resets the history file."""
+        if os.path.exists(Config.HISTORY_FILE):
+            os.remove(Config.HISTORY_FILE)
+            logger.info(f"Memory cleared. '{Config.HISTORY_FILE}' has been removed.")
+        else:
+            logger.info("Memory was already empty.")
+
 
 # ==============================================================================
 # STEP 1: KEYWORD & TREND RESEARCH (Google Trends US/GB with Tech Filters)
@@ -140,7 +257,20 @@ class TechTrendResearcher:
         {"title": "Modern API Security Architecture: Zero Trust & Token Hardening", "geo": "US", "traffic": "30K+"},
         {"title": "TypeScript 5.8 & React 19: The New Frontend Architecture Paradigm", "geo": "GB", "traffic": "25K+"},
         {"title": "Automating DevOps Pipelines with GitHub Actions and Terraform", "geo": "US", "traffic": "20K+"},
-        {"title": "Quantum Computing Milestones and Post-Quantum Cryptography in 2026", "geo": "GB", "traffic": "15K+"}
+        {"title": "Model Context Protocol (MCP): The New Standard for AI Tool Use", "geo": "US", "traffic": "45K+"},
+        {"title": "Building Production RAG with Vector Databases and Hybrid Search", "geo": "GB", "traffic": "38K+"},
+        {"title": "eBPF in Linux and Kubernetes: High-Speed Observability & Security", "geo": "US", "traffic": "28K+"},
+        {"title": "Event-Driven Microservices: Kafka vs RabbitMQ in Modern Cloud", "geo": "GB", "traffic": "26K+"},
+        {"title": "Docker Multi-Stage Builds and Distroless Images for Python", "geo": "US", "traffic": "22K+"},
+        {"title": "WebAssembly on the Server: Replacing Containers in Edge Runtimes", "geo": "GB", "traffic": "19K+"},
+        {"title": "PostgreSQL 17 Performance Tuning: Indexing and Connection Pooling", "geo": "GB", "traffic": "24K+"},
+        {"title": "Async Python Mastery: Asyncio, AnyIO, and Structured Concurrency", "geo": "US", "traffic": "32K+"},
+        {"title": "Quantum Computing Milestones and Post-Quantum Cryptography in 2026", "geo": "GB", "traffic": "15K+"},
+        {"title": "Fine-Tuning Small Language Models with LoRA and QLoRA", "geo": "US", "traffic": "42K+"},
+        {"title": "GraphQL vs REST vs gRPC: How Modern Engineering Teams Choose APIs", "geo": "GB", "traffic": "21K+"},
+        {"title": "Infrastructure as Code: Pulumi vs Terraform for Cloud Teams", "geo": "US", "traffic": "18K+"},
+        {"title": "Next-Gen CSS and Tailwind CSS v4: Architecture Guide", "geo": "GB", "traffic": "17K+"},
+        {"title": "Cybersecurity in the AI Era: Prompt Injections and LLM Red-Teaming", "geo": "US", "traffic": "39K+"}
     ]
 
     @classmethod
@@ -252,19 +382,31 @@ class TechTrendResearcher:
                     seen_titles.add(clean_key)
                     collected.append(item)
 
-        # 3. If live trends returned fewer than requested tech topics, supplement with curated topics
-        if len(collected) < max_count:
-            logger.info(f"Live feeds provided {len(collected)} verified tech topics. Supplementing with curated trending topics.")
-            for fallback in cls.FALLBACK_TECH_TOPICS:
-                clean_key = fallback["title"].lower().strip()
-                if clean_key not in seen_titles:
-                    seen_titles.add(clean_key)
-                    collected.append(fallback)
-                if len(collected) >= max_count:
-                    break
+        # 3. Always add curated tech topics to available pool to ensure deep selection
+        for fallback in cls.FALLBACK_TECH_TOPICS:
+            clean_key = fallback["title"].lower().strip()
+            if clean_key not in seen_titles:
+                seen_titles.add(clean_key)
+                collected.append(fallback)
 
-        selected = collected[:max_count]
-        logger.info(f"Successfully selected {len(selected)} verified Tech Trends:")
+        # 4. Filter against persistent HistoryManager to eliminate duplicates
+        selected: List[Dict[str, str]] = []
+        for item in collected:
+            already_covered, reason = HistoryManager.is_already_covered(item["title"])
+            if already_covered:
+                logger.info(f"⏭️  [Deduplication] Skipping '{item['title']}' (Already generated: {reason})")
+                continue
+            selected.append(item)
+            if len(selected) >= max_count:
+                break
+
+        if len(selected) < max_count:
+            logger.warning(
+                f"Memory database already contains most trending topics. "
+                f"Selected {len(selected)}/{max_count} fresh topics. Add more topics or clear history if needed."
+            )
+
+        logger.info(f"Successfully selected {len(selected)} FRESH, non-duplicate Tech Trends:")
         for idx, item in enumerate(selected, 1):
             logger.info(f"  {idx}. [{item['geo']}] {item['title']} (Est. Volume: {item.get('traffic', 'N/A')})")
 
@@ -742,6 +884,16 @@ class BloggerAutomationPipeline:
             with open(filename, "w", encoding="utf-8") as f:
                 f.write(f"<!-- Title: {article_title} -->\n{html_content}")
             logger.info(f"[DRY-RUN MODE] HTML preview saved to: {filename}")
+
+            # Record in persistent history memory to prevent future duplicates
+            HistoryManager.record_entry(
+                topic=title_topic,
+                title=article_title,
+                geo=geo,
+                post_id="dry-run-preview",
+                is_draft=True
+            )
+
             return {
                 "title": article_title,
                 "status": "DRAFT (DRY RUN)",
@@ -756,6 +908,16 @@ class BloggerAutomationPipeline:
                 labels=labels,
                 meta_description=seo_meta.get("description")
             )
+
+            # Record in persistent memory database
+            HistoryManager.record_entry(
+                topic=title_topic,
+                title=article_title,
+                geo=geo,
+                post_id=str(draft_result.get("id", "blogger-draft")),
+                is_draft=True
+            )
+
             return draft_result
         except Exception as e:
             logger.error(f"Failed to stage draft on Blogger: {e}")
@@ -824,8 +986,27 @@ def main():
         default=4,
         help="Hours to sleep between batches when running in '--mode daemon' (Default: 4 hours)"
     )
+    parser.add_argument(
+        "--history",
+        action="store_true",
+        help="Display list of all previously generated topics in persistent memory"
+    )
+    parser.add_argument(
+        "--clear-history",
+        action="store_true",
+        help="Clear the memory database (published_history.json) to start fresh"
+    )
 
     args = parser.parse_args()
+
+    # Handle history inspection or reset commands
+    if args.history:
+        HistoryManager.print_history_summary()
+        sys.exit(0)
+
+    if args.clear_history:
+        HistoryManager.clear_history()
+        sys.exit(0)
 
     # Verify Configuration (unless dry-run without credentials)
     if not Config.GEMINI_API_KEY:

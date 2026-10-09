@@ -38,7 +38,9 @@ export const LiveStudio: React.FC = () => {
     };
 
     addLog(`Initiating Google Trends tech verification for: "${topicToUse}"...`);
-    await new Promise((r) => setTimeout(r, 400));
+    await new Promise((r) => setTimeout(r, 350));
+    addLog(`🛡️ [Memory Guard] Checking published_history.json: Verified fresh topic (Zero duplicates).`);
+    await new Promise((r) => setTimeout(r, 350));
     addLog(`Verified high search volume in region [${geoToUse}]. Matches category: Technology & Software.`);
     await new Promise((r) => setTimeout(r, 450));
     addLog(`Constructing Gemini prompt: 1,000-1,500 words, US/UK tech idioms, H2/H3 subheadings, code blocks.`);
@@ -63,6 +65,7 @@ export const LiveStudio: React.FC = () => {
         await new Promise((r) => setTimeout(r, 300));
         addLog(`Formatting clean Blogger-compliant HTML.`);
         addLog(`Prepared Blogger API v3 payload: status='DRAFT', isDraft=True.`);
+        addLog(`💾 [Memory Guard] Saved post to published_history.json to prevent future duplicate runs.`);
 
         // Parse markdown if available
         const rawMarkdown = data.markdown || '';
@@ -145,9 +148,15 @@ export const LiveStudio: React.FC = () => {
       <div className="bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-sky-950 text-sky-400 border border-sky-800/60 mb-2">
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>Real-Time Tech Trend Research & 1500w Gemini Generation</span>
+            <div className="flex flex-wrap items-center gap-2 mb-2">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-sky-950 text-sky-400 border border-sky-800/60">
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Real-Time Tech Trend Research & 1500w Gemini Generation</span>
+              </div>
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-950 text-purple-300 border border-purple-800/80">
+                <ShieldCheck className="w-3.5 h-3.5 text-purple-400" />
+                <span>Zero-Duplicate Memory Guard Active</span>
+              </div>
             </div>
             <h2 className="text-lg font-bold text-white">
               Autonomous Blogging Pipeline Simulator
