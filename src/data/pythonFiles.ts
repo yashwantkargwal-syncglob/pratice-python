@@ -121,6 +121,11 @@ class Config:
     # Automatically generates & embeds real AI tech illustrations into Blogger drafts
     EMBED_REAL_IMAGES: bool = os.getenv("EMBED_REAL_IMAGES", "true").lower() in ("true", "1", "yes")
 
+    # 11. INTERNAL LINKING & BACKLINKS CONFIGURATION
+    # Automatically weaves backlinks to already published posts into new drafts
+    ENABLE_INTERNAL_LINKING: bool = os.getenv("ENABLE_INTERNAL_LINKING", "true").lower() in ("true", "1", "yes")
+    MAX_INTERNAL_LINKS: int = int(os.getenv("MAX_INTERNAL_LINKS", "2"))
+
 
 # ==============================================================================
 # MEMORY & DEDUPLICATION ENGINE
@@ -224,6 +229,24 @@ class HistoryManager:
                 print(f"{idx}. [{a.get('date', 'N/A')}] [{a.get('geo', 'US')}] {a.get('title')}")
                 print(f"   Original Topic: '{a.get('topic')}' | Blogger ID: {a.get('post_id')}")
         print("=" * 70 + "\n")
+
+    @classmethod
+    def get_published_history_links(cls, max_count: int = 10) -> List[Dict[str, str]]:
+        """
+        Loads recorded past articles with titles and URLs to use for
+        contextual internal linking in dry-run or when Blogger API is offline.
+        """
+        history = cls.load_history()
+        articles = history.get("articles", [])
+        links = []
+        for a in reversed(articles):
+            title = a.get("title") or a.get("topic")
+            url = a.get("url") or f"https://yourblog.blogspot.com/posts/{re.sub(r'[^a-zA-Z0-9]', '-', a.get('topic', '').lower())[:30]}"
+            if title and url:
+                links.append({"title": title, "url": url})
+            if len(links) >= max_count:
+                break
+        return links
 
     @classmethod
     def clear_history(cls):
@@ -475,12 +498,32 @@ class GeminiContentEngine:
             "Please run: pip install google-genai"
         )
 
-    def _build_prompt(self, topic: str, geo: str) -> str:
+    def _build_prompt(self, topic: str, geo: str, internal_links: Optional[List[Dict[str, str]]] = None) -> str:
         """
         Builds the precision prompt enforcing 1,000-1,500 words, H2/H3 headers,
-        code blocks, image suggestion tags every 300 words, and SEO metadata.
+        code blocks, image suggestion tags every 300 words, SEO metadata,
+        and natural contextual internal backlinks.
         """
         locale_preference = "US English" if geo == "US" else "UK English"
+
+        backlink_instructions = ""
+        if internal_links and Config.ENABLE_INTERNAL_LINKING:
+            links_formatted = []
+            for link in internal_links[:Config.MAX_INTERNAL_LINKS]:
+                links_formatted.append(f'   - Title: "{link["title"]}" | URL: {link["url"]}')
+            links_text = "\n".join(links_formatted)
+            target_count = min(len(internal_links), Config.MAX_INTERNAL_LINKS)
+
+            backlink_instructions = f"""
+6. SEAMLESS CONTEXTUAL INTERNAL BACKLINKS (CRITICAL SEO RULE):
+   The blog has previously published these existing tech articles:
+{links_text}
+
+   NATURAL INTEGRATION INSTRUCTIONS:
+   - You MUST organically weave exactly {target_count} internal markdown hyperlink(s) into the body paragraphs using syntax: \`[descriptive natural anchor text](URL)\`.
+   - IT MUST FEEL 100% INVISIBLE & ORGANIC: The link MUST fit the technical flow of the sentence naturally (e.g., "...similar to the concurrency patterns we examined in [Rust vs Go for Microservices](URL)..." or "...when managing ephemeral state, as discussed in our deep-dive on [Agentic AI Workflows](URL)...").
+   - STRICT BAN: NEVER make a lazy bulleted "Related Posts:" or "Also read:" section. Weave it directly inside the actual technical explanation paragraphs!
+"""
         
         return f"""You are a distinguished Senior Software Engineer, Technology Columnist, and SEO Specialist writing for a high-traffic developer and technology blog aimed at a tech-savvy audience in the {geo} ({locale_preference}).
 
@@ -500,6 +543,7 @@ CRITICAL EDITORIAL AND STRUCTURAL GUIDELINES:
    - Every ~300 words of content, you MUST insert a dedicated image anchor in this exact syntax:
      [IMAGE_SUGGESTION: Highly descriptive prompt to generate or find a matching image, e.g., 'A modern high-tech server rack illuminated with neon violet LED indicators in a dark data center']
    - Ensure you include AT LEAST 3 to 4 distinct [IMAGE_SUGGESTION: ...] tags placed naturally between sections.
+{backlink_instructions}
 5. EXPLICIT SEO METADATA BLOCK:
    - At the very end of your response, output the following structured block verbatim:
    
@@ -512,9 +556,9 @@ PRIMARY_KEYWORDS: [Comma-separated list of 5-8 relevant tech keywords]
 Write the complete article now in clean Markdown.
 """
 
-    def generate_article(self, topic: str, geo: str = "US") -> str:
-        """Calls Gemini API with automatic model fallback to generate the full article."""
-        prompt = self._build_prompt(topic, geo)
+    def generate_article(self, topic: str, geo: str = "US", internal_links: Optional[List[Dict[str, str]]] = None) -> str:
+        """Calls Gemini API with automatic model fallback to generate the full article with internal backlinks."""
+        prompt = self._build_prompt(topic, geo, internal_links)
         logger.info(f"Requesting Gemini content generation for topic: '{topic}' ({geo})...")
 
         # Active supported models in cascade order
@@ -864,6 +908,32 @@ class BloggerClient:
             "status": "DRAFT"
         }
 
+    def get_published_posts(self, max_results: int = 15) -> List[Dict[str, str]]:
+        """
+        Retrieves already published/live posts from the Blogger blog
+        to use for natural contextual internal backlinking.
+        """
+        try:
+            logger.info("Fetching published posts from Blogger for internal linking...")
+            response = self.service.posts().list(
+                blogId=self.blog_id,
+                status=['LIVE'],
+                maxResults=max_results,
+                fetchBodies=False
+            ).execute()
+            items = response.get("items", [])
+            published = []
+            for post in items:
+                title = post.get("title")
+                url = post.get("url")
+                if title and url:
+                    published.append({"title": title, "url": url})
+            logger.info(f"Retrieved {len(published)} published post(s) from Blogger for backlink integration.")
+            return published
+        except Exception as e:
+            logger.warning(f"Could not fetch published posts from Blogger API: {e}")
+            return []
+
 
 # ==============================================================================
 # PIPELINE ORCHESTRATOR
@@ -891,9 +961,24 @@ class BloggerAutomationPipeline:
         logger.info(f"PROCESSING TOPIC: '{title_topic}' [Region: {geo}]")
         print("=" * 70)
 
-        # 1. Gemini Content Generation
+        # 1. Fetch published posts to weave natural internal backlinks
+        internal_links = []
+        if Config.ENABLE_INTERNAL_LINKING:
+            if not self.dry_run and self.blogger_client:
+                internal_links = self.blogger_client.get_published_posts(max_results=Config.MAX_INTERNAL_LINKS * 3)
+            # Fallback to local memory history if Blogger has 0 published posts or during dry-run
+            if not internal_links:
+                internal_links = HistoryManager.get_published_history_links(max_count=Config.MAX_INTERNAL_LINKS * 3)
+
+            if internal_links:
+                selected_links = internal_links[:Config.MAX_INTERNAL_LINKS]
+                logger.info(f"🔗 [Internal Backlinks] Found {len(selected_links)} published post(s) to seamlessly weave into draft:")
+                for l in selected_links:
+                    logger.info(f"   * '{l['title']}' -> {l['url']}")
+
+        # 2. Gemini Content Generation
         try:
-            raw_markdown = self.gemini_engine.generate_article(title_topic, geo)
+            raw_markdown = self.gemini_engine.generate_article(title_topic, geo, internal_links)
         except Exception as e:
             logger.error(f"Failed to generate article for '{title_topic}': {e}")
             return None
