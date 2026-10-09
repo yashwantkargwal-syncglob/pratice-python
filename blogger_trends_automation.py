@@ -28,6 +28,8 @@ import json
 import logging
 import argparse
 import urllib.request
+import urllib.parse
+import html
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
@@ -100,6 +102,10 @@ class Config:
     # 9. ARTICLE MEMORY & DEDUPLICATION DATABASE
     # Persistent JSON tracking all generated topics to guarantee 0 duplicates
     HISTORY_FILE: str = os.getenv("HISTORY_FILE", "published_history.json")
+
+    # 10. REAL IMAGE GENERATION & EMBEDDING
+    # Automatically generates & embeds real AI tech illustrations into Blogger drafts
+    EMBED_REAL_IMAGES: bool = os.getenv("EMBED_REAL_IMAGES", "true").lower() in ("true", "1", "yes")
 
 
 # ==============================================================================
@@ -610,25 +616,44 @@ class BloggerContentFormatter:
     @classmethod
     def convert_image_suggestions_to_html(cls, html_content: str) -> str:
         """
-        Transforms [IMAGE_SUGGESTION: ...] into a professional, styled Blogger
-        visual placeholder card so the author can easily inspect it or swap it
-        with a generated image in the Blogger dashboard.
+        Transforms [IMAGE_SUGGESTION: ...] into real, high-resolution AI tech images
+        embedded directly into the Blogger HTML with responsive styling, rounded corners,
+        alt tags, and figure captions.
         """
+        image_index = 0
+
         def replace_match(match):
+            nonlocal image_index
+            image_index += 1
             prompt = match.group(1).strip()
-            card_html = f"""
+
+            if Config.EMBED_REAL_IMAGES:
+                # Generate real AI image URL via Pollinations AI (Zero API key required)
+                encoded_prompt = urllib.parse.quote(f"{prompt}, high quality 4k tech illustration, modern tech aesthetic")
+                image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1200&height=675&nologo=true"
+                alt_text = html.escape(prompt[:120])
+                caption_text = html.escape(prompt)
+
+                return f"""
+<figure class="blogger-article-image" style="margin: 32px 0; text-align: center;">
+  <img src="{image_url}" alt="{alt_text}" style="width: 100%; max-width: 820px; height: auto; border-radius: 12px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3); display: block; margin: 0 auto; object-fit: cover;" loading="lazy" />
+  <figcaption style="margin-top: 10px; font-size: 13px; color: #64748b; font-style: italic; line-height: 1.4;">
+    Figure {image_index}: {caption_text}
+  </figcaption>
+</figure>
+"""
+            else:
+                return f"""
 <div class="blogger-image-placeholder" style="margin: 28px 0; padding: 18px 22px; background: #0f172a; border-left: 4px solid #38bdf8; border-radius: 8px; color: #f1f5f9; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;">
   <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
     <span style="display: inline-block; width: 10px; height: 10px; background-color: #38bdf8; border-radius: 50%;"></span>
-    <strong style="color: #38bdf8; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em;">Suggested Visual Asset</strong>
+    <strong style="color: #38bdf8; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em;">Suggested Visual Asset #{image_index}</strong>
   </div>
   <p style="margin: 0 0 6px 0; font-size: 14px; font-style: italic; color: #cbd5e1; line-height: 1.5;">"{prompt}"</p>
-  <span style="font-size: 11px; color: #94a3b8;">Insert your banner or Midjourney/Gemini generated illustration here prior to publishing.</span>
+  <span style="font-size: 11px; color: #94a3b8;">Insert your banner or generated illustration here prior to publishing.</span>
 </div>
 """
-            return card_html
 
-        # Replace both markdown bracket syntax and raw occurrences
         pattern = r"\[IMAGE_SUGGESTION:\s*([^\]]+)\]"
         return re.sub(pattern, replace_match, html_content)
 
