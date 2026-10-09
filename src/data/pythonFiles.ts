@@ -344,37 +344,51 @@ Write the complete article now in clean Markdown.
         prompt = self._build_prompt(topic, geo)
         logger.info(f"Requesting Gemini content generation for topic: '{topic}' ({geo})...")
 
-        max_retries = 3
-        backoff_sec = 5
+        preferred_model = Config.GEMINI_MODEL
+        model_candidates = [preferred_model]
+        for fallback in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]:
+            if fallback not in model_candidates:
+                model_candidates.append(fallback)
 
-        for attempt in range(1, max_retries + 1):
-            try:
-                if self.client_type == "google_genai":
-                    from google.genai import types
-                    response = self.client.models.generate_content(
-                        model=Config.GEMINI_MODEL,
-                        contents=prompt,
-                        config=types.GenerateContentConfig(temperature=0.7, top_p=0.95)
-                    )
-                    text = response.text
-                else:
-                    model = self.client.GenerativeModel(Config.GEMINI_MODEL)
-                    response = model.generate_content(prompt)
-                    text = response.text
+        last_error = None
+        for model_name in model_candidates:
+            logger.info(f"Attempting content generation using model: '{model_name}'...")
+            max_retries = 2
+            backoff_sec = 4
 
-                if not text or len(text.strip()) < 400:
-                    raise ValueError("Received unexpectedly short response from Gemini.")
+            for attempt in range(1, max_retries + 1):
+                try:
+                    if self.client_type == "google_genai":
+                        from google.genai import types
+                        response = self.client.models.generate_content(
+                            model=model_name,
+                            contents=prompt,
+                            config=types.GenerateContentConfig(temperature=0.7, top_p=0.95)
+                        )
+                        text = response.text
+                    else:
+                        model = self.client.GenerativeModel(model_name)
+                        response = model.generate_content(prompt)
+                        text = response.text
 
-                word_count = len(text.split())
-                logger.info(f"Gemini generation successful! Generated {word_count} words.")
-                return text
+                    if not text or len(text.strip()) < 400:
+                        raise ValueError("Received unexpectedly short response from Gemini.")
 
-            except Exception as e:
-                logger.warning(f"Gemini attempt {attempt}/{max_retries} failed: {e}")
-                if attempt < max_retries:
-                    time.sleep(backoff_sec * attempt)
-                else:
-                    raise
+                    word_count = len(text.split())
+                    logger.info(f"Gemini generation successful using '{model_name}'! Generated {word_count} words.")
+                    return text
+
+                except Exception as e:
+                    err_str = str(e)
+                    last_error = e
+                    logger.warning(f"Model '{model_name}' attempt {attempt}/{max_retries} failed: {e}")
+                    if "404" in err_str or "NOT_FOUND" in err_str or "503" in err_str or "UNAVAILABLE" in err_str:
+                        logger.info(f"Model '{model_name}' unavailable or busy. Switching to fallback candidate...")
+                        break
+                    if attempt < max_retries:
+                        time.sleep(backoff_sec * attempt)
+
+        raise RuntimeError(f"All Gemini model candidates failed. Last error: {last_error}")
 
 
 # ==============================================================================
